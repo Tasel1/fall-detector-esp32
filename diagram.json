@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "author": "Nurali",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "wokwi-esp32-devkit-v1",
+      "id": "esp",
+      "top": 0,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-mpu6050",
+      "id": "mpu",
+      "top": 0,
+      "left": 300,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn_cancel",
+      "top": 150,
+      "left": 300,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led",
+      "top": 300,
+      "left": 300,
+      "attrs": { "color": "red" }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn_fall_sim",
+      "top": 150,
+      "left": 450,
+      "attrs": {}
+    }
+  ],
+  "connections": [
+    ["esp:GND.1", "mpu:GND", "black", ["v0", "h0"]],
+    ["esp:3V3", "mpu:VCC", "red", ["v0", "h20"]],
+    ["esp:D21", "mpu:SDA", "green", ["v0", "h40"]],
+    ["esp:D22", "mpu:SCL", "blue", ["v0", "h60"]],
+    ["esp:GND.1", "btn_cancel:1.l", "black", ["v60", "h0"]],
+    ["esp:D18", "btn_cancel:1.r", "yellow", ["v60", "h20"]],
+    ["esp:GND.1", "led:C", "black", ["v120", "h0"]],
+    ["esp:D19", "led:A", "orange", ["v120", "h20"]],
+    ["esp:GND.1", "btn_fall_sim:1.l", "black", ["v180", "h0"]],
+    ["esp:D23", "btn_fall_sim:1.r", "purple", ["v180", "h20"]]
+  ]
+}
