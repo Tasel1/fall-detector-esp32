@@ -1,105 +1,109 @@
-#include <Wire.h>
-#include <MPU6050.h>
+#include <Arduino.h>
+#include "config.h"
+#include "modules/power/nvs_manager.h"
+#include "modules/sensors/i2c_bus.h"
+#include "modules/power/power_mgmt.h"
+#include "modules/sensors/imu_sensor.h"
+#include "modules/sensors/button_sensor.h"
+#include "modules/fall_detector/fall_detector.h"
+#include "modules/fall_detector/timer.h"
+#include "modules/motion_monitor/motion_monitor.h"
+#include "modules/ui/display_service.h"
+#include "modules/ui/haptic_service.h"
+#include "modules/alert_manager/alert_manager.h"
 
-MPU6050 mpu;
+enum class SystemState { MONITORING, PRE_ALERT, FALL_DETECTED, MANUAL_SOS };
+SystemState currentState = SystemState::MONITORING;
 
-const int buttonCancelPin = 18;
-const int ledPin = 19;
-const int buttonFallSimPin = 23;
-
-bool fallDetected = false;
-unsigned long fallTime = 0;
-const unsigned long cancelWindow = 60000;
-bool callMade = false;
-const float accelThreshold = 2.5;
-
-unsigned long pressStart = 0;
-bool wasPressed = false;
-const unsigned long longPressTime = 10000;
+FallDetector detector;
+FallTimer preAlertTimer;
+MotionMonitor motionMonitor;
+unsigned long lastSensorRead = 0;
+unsigned long preAlertStartTime = 0;
 
 void setup() {
-  Serial.begin(115200);
-  Wire.begin();
-  mpu.initialize();
-  if (!mpu.testConnection()) {
-    Serial.println("MPU6050 connection failed");
-    while (1);
-  }
-  pinMode(buttonCancelPin, INPUT_PULLUP);
-  pinMode(buttonFallSimPin, INPUT_PULLUP);
-  pinMode(ledPin, OUTPUT);
-  digitalWrite(ledPin, LOW);
-  Serial.println("System ready");
-}
-
-float getTotalAcceleration() {
-  int16_t ax, ay, az;
-  mpu.getAcceleration(&ax, &ay, &az);
-  float ax_g = ax / 16384.0;
-  float ay_g = ay / 16384.0;
-  float az_g = az / 16384.0;
-  return sqrt(ax_g*ax_g + ay_g*ay_g + az_g*az_g);
-}
-
-bool checkFall() {
-  return getTotalAcceleration() > accelThreshold;
+    Serial.begin(115200);
+    pinMode(2, OUTPUT); 
+    I2CBus::begin();
+    DisplayService::begin();
+    NVSManager::begin();
+    IMUSensor::begin();
+    ButtonSensor::begin();
+    AlertManager::begin();
+    DisplayService::showStatus("Monitoring", PowerMgmt::getBatteryPercentage());
 }
 
 void loop() {
-  bool nowPressed = (digitalRead(buttonCancelPin) == LOW);
-  if (nowPressed && !wasPressed) pressStart = millis();
-  if (!nowPressed && wasPressed) {
-    unsigned long pressDuration = millis() - pressStart;
-    if (fallDetected && pressDuration < 3000) {
-      Serial.println("CALL_CANCELLED_BY_USER");
-      fallDetected = false;
-      callMade = false;
-      digitalWrite(ledPin, LOW);
-    } else if (!fallDetected && pressDuration >= longPressTime) {
-      Serial.println("MANUAL_EMERGENCY_CALL");
-      for (int i=0; i<5; i++) {
-        digitalWrite(ledPin, HIGH); delay(200);
-        digitalWrite(ledPin, LOW); delay(200);
-      }
+    unsigned long now = millis();
+    
+    // ВАЖНО: Обновляем состояние кнопки в каждой итерации
+    ButtonSensor::update();
+
+    // Визуализация Heartbeat
+    digitalWrite(2, (now / 500) % 2);
+
+    // SOS check (Высокий приоритет)
+    if (ButtonSensor::wasSOSPressed()) {
+        currentState = SystemState::MANUAL_SOS;
     }
-  }
-  wasPressed = nowPressed;
 
-  static bool lastSimState = HIGH;
-  bool simNow = (digitalRead(buttonFallSimPin) == LOW);
-  if (simNow && !lastSimState && !fallDetected) {
-    fallDetected = true;
-    fallTime = millis();
-    callMade = false;
-    digitalWrite(ledPin, HIGH);
-    Serial.println("SIMULATED_FALL_DETECTED! Press cancel button within 60 sec");
-  }
-  lastSimState = simNow;
+    switch (currentState) {
+        case SystemState::MONITORING: {
+            if (now - lastSensorRead >= 100) {
+                lastSensorRead = now;
+                float ax, ay, az;
+                if (IMUSensor::getSensorData(ax, ay, az)) {
+                    float mag = IMUSensor::calculateMagnitude(ax, ay, az);
+                    motionMonitor.update(mag);
 
-  if (fallDetected) {
-    if (!callMade && (millis() - fallTime >= cancelWindow)) {
-      Serial.println("AUTOMATIC_EMERGENCY_CALL");
-      callMade = true;
-      digitalWrite(ledPin, HIGH);
-      static unsigned long resetTime = 0;
-      if (resetTime == 0) resetTime = millis() + 30000;
-      if (millis() >= resetTime) {
-        fallDetected = false;
-        callMade = false;
-        digitalWrite(ledPin, LOW);
-        resetTime = 0;
-      }
+                    if (detector.processSensorData(ax, ay, az) || motionMonitor.hasFainted(FAINT_TIMEOUT_MS)) {
+                        currentState = SystemState::PRE_ALERT;
+                        preAlertTimer.start(PRE_ALERT_DURATION_MS);
+                        preAlertStartTime = now;
+                        AlertManager::startAlert();
+                        ButtonSensor::clear(); 
+                    }
+                }
+            }
+            break;
+        }
+            
+        case SystemState::PRE_ALERT: {
+            // Отмена только через 1 сек после начала (защита от дребезга симулятора)
+            if (now - preAlertStartTime > 1000) {
+                if (ButtonSensor::wasPressed()) {
+                    AlertManager::stop();
+                    currentState = SystemState::MONITORING;
+                    motionMonitor.resetFaintTimer();
+                    DisplayService::showStatus("Canceled", PowerMgmt::getBatteryPercentage());
+                    delay(1500);
+                    DisplayService::showStatus("Monitoring", PowerMgmt::getBatteryPercentage());
+                    return;
+                }
+            }
+
+            if (preAlertTimer.isExpired()) {
+                AlertManager::stop();
+                currentState = SystemState::FALL_DETECTED;
+            } else {
+                float ratio = 1.0f - ((float)preAlertTimer.remaining() / PRE_ALERT_DURATION_MS);
+                AlertManager::updateAlert(ratio);
+                DisplayService::showCountdown(preAlertTimer.remaining() / 1000);
+            }
+            break;
+        }
+
+        case SystemState::FALL_DETECTED:
+        case SystemState::MANUAL_SOS: {
+            DisplayService::showStatus("SOS SENT!", PowerMgmt::getBatteryPercentage());
+            delay(3000);
+            ButtonSensor::clear(); 
+            currentState = SystemState::MONITORING;
+            motionMonitor.resetFaintTimer();
+            DisplayService::showStatus("Monitoring", PowerMgmt::getBatteryPercentage());
+            break;
+        }
+            
+        default: break;
     }
-    return;
-  }
-
-  if (checkFall()) {
-    fallDetected = true;
-    fallTime = millis();
-    callMade = false;
-    digitalWrite(ledPin, HIGH);
-    Serial.println("FALL_DETECTED! Press cancel button within 60 sec");
-  }
-
-  delay(50);
 }

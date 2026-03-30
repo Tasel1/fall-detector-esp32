@@ -1,1 +1,41 @@
-.pio
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+libdeps/
+
+# Unit Test reports
+.test/
+
+# Compilation and intermediate files
+*.o
+*.a
+*.so
+*.exe
+*.dll
+build/
+bin/
+obj/
+out/
+
+# Simulator binaries
+sim
+/sim
+
+# Environment and secrets
+.env*
+*.log
+
+# Editor-specific
+.vscode/
+.idea/
+*.swp
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Project sources (DO NOT IGNORE THESE)
+# src/
+# include/
+# lib/
+# test/
