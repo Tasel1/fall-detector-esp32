@@ -34,6 +34,11 @@ sim
 .DS_Store
 Thumbs.db
 
+# AI Agent & Internal Specs
+.gemini/
+.specify/
+specs/
+
 # Project sources (DO NOT IGNORE THESE)
 # src/
 # include/
